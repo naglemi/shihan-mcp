@@ -1,0 +1,1082 @@
+
+Write
+
+Ypkqkvfhw
+Your subscription payment failed.Update payment method
+AI Advances
+AI Advances
+Democratizing access to artificial intelligence
+Follow publication
+Member-only story
+Using Custom Agents in Cursor, Windsurf, Copilot and Others to Supercharge Your Workflow
+
+Kenny Vaneetvelde
+AI Advances
+Kenny Vaneetvelde
+·
+Follow
+Published in
+AI Advances
+·
+22 min read
+·
+Feb 28, 2025
+344
+
+3
+
+
+
+
+
+All images were created by author
+Did you know that you can make the AI-driven IDE of your choice even smarter and even more useful by running your very own agents inside of it? What’s more is that it is actually quite simple!
+Now, I am not trying to sell you on to any SaaS platform that you’ll overpay for and can never get rid of again no matter how much you want more flexibility, instead we will be using the Atomic Agents framework which is by far the simplest and most lightweight way out there to build AI agents like this (even if, as the framework’s creator, I do say so myself).
+So, how can we hack into the functionality of these IDEs to do things our way with our own agents? Easy! We’ll be using Anthropic’s Model Context Protocol to make all this happen without a hitch.
+Latest Version on GitHub: https://github.com/KennyVaneetvelde/atomic-research-mcp
+NOTE: In the article the MCP is called “agentic-research-mcp”, I have since renamed it to “atomic-research-mcp”
+The TL;DR on Model Context Protocol
+Many of you may have heard of the Model Context Protocol, or MCP for short. What you probably did not realize however is that MCP is for more than just enabling Claude to use your Browser, despite the fact that 99% of the YouTube videos about MCP were exactly that, though that’s probably because it is easily the most clickbaity thing you can do with it, as long as you make sure to combine it with an appropriately hyperbolic title such as “UNLEASH AI Agents in your browser and UNLOCK your productivity 100X By letting AI WORK for YOU!”.
+According to the words on the website itself:
+MCP is an open protocol that standardizes how applications provide context to LLMs. Think of MCP like a USB-C port for AI applications. Just as USB-C provides a standardized way to connect your devices to various peripherals and accessories, MCP provides a standardized way to connect AI models to different data sources and tools.
+And if there is one thing that AI Agents are, then it’s great tools. So this got me thinking, what if we, instead of just using MCP to give our Cursor (or, Windsurf, or Copilot of course) a better search tool, or a tool to interface with some database, an actual agent that can do this instead?
+And YES, in case you were wondering, this is a universally acceptable protocol, meaning you could re-use these agents in any other application that supports MCP!
+For more information on the Model Context Protocol I highly recommend paying a visit to the original documentation.
+The Project
+First of all the instructions will mainly be for Cursor at certain points since I use Cursor, but a lot of the other IDE’s & coding assistants like Copilot, Windsurf, Cline, … all support MCP. That being said, let’s initialize the project.
+Lately, I have been making a lot of use of uv by Astral, which is an extremely good and extremely handy package manager for Python (miles more fun to use than Poetry!)
+The finished project can be found here: https://github.com/KennyVaneetvelde/atomic-research-mcp but do keep on reading if you want to truly understand how it works, or if you’d like to follow along in a step-by-step manner.
+Setting Up the Project
+First, let’s get rid of some housekeeping: setting up the project. As mentioned before I use uv so this article is assuming you have that set up as well, if not, you can easily follow along with something like poetry as well.
+First, initialize a new project and add all of the dependencies we’ll be needing:
+uv init
+uv add mcp[cli] atomic-agents openai instructor aiohttp beautifulsoup4 markdownify readability-lxml requests pydantic lxml[html_clean] python-dotenv
+And just to verify everything is working, we will create a basic MCP server and a test script that we can continue using later on to keep easily testing out our server as we go.
+Creating a Basic MCP Server
+Creating an MCP server is actually ridiculously easy using the Python SDK.
+MCP Servers can currently use two kinds of transports, one being SSE (Server Sent Events) and the other being StdIO (Standard Input/Output) which is great for local servers. In this case we’ll be using the latter but you can easily switch to SSE instead. For more info see the official documentation on Transports.
+In this case, we want our server and all related code to be part of its own module, so for that reason we’ll create a folder called agentic_research_mcp.
+In there, let’s create a server.py
+# agentic_research_mcp\server.py
+
+import logging
+from mcp.server.fastmcp import FastMCP
+
+# Set the logging level to WARNING
+logging.basicConfig(level=logging.WARNING)
+
+
+def main():
+    # Create a new MCP server with the identifier "tutorial"
+    mcp = FastMCP("tutorial")
+
+    # Register a simple tool that returns a greeting
+    @mcp.tool(name="hello", description="Returns a simple greeting message.")
+    async def hello_tool(args: dict) -> str:
+        return "Hello, World! This is your basic MCP server."
+
+    @mcp.tool(
+        name="string_length", description="Calculate the length of a given string."
+    )
+    async def string_length_tool(args: dict) -> dict:
+        input_string = args.get("text", "")
+        return {"text": input_string, "length": len(input_string)}
+
+    @mcp.tool(name="reverse_strings", description="Reverse each string in the list.")
+    async def reverse_strings_tool(args: dict) -> dict:
+        strings = args.get("strings", [])
+        reversed_strings = [
+            s[::-1] for s in strings
+        ]
+        return {"original": strings, "reversed": reversed_strings}
+
+    # Start the server
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
+This server defines 3 very simple tools for now just to make sure everything is working. The first being just a “hello world” and with the second and third being some string utilities.
+For more info on Tools within MCP, check the official docs.
+NOTE: You could already stop here and have a very useful MCP server for certain things that an LLM is normally bad at, such as counting characters, reversing strings, and other character-level string operations.
+And let’s also make a test_client.py in the root.
+# test_client.py
+
+import asyncio
+import sys
+from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters
+
+async def main():
+    # Connect to the server using the current Python interpreter
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "agentic_research_mcp.server"],
+    )
+
+    print("\n📱 Starting MCP client...\n")
+
+    # Connect to the server and create a session
+    async with stdio_client(server_params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            # Initialize the session and get available tools
+            await session.initialize()
+            tools = await session.list_tools()
+            print("🔧 Available tools:", ", ".join(tool.name for tool in tools.tools))
+
+            # Call the hello tool
+            response = await session.call_tool(
+                name="hello",
+                arguments={"args": {}},
+            )
+            print("\n💬 Server response (hello):", response.content[0].text)
+
+            # Test string length tool
+            test_string = "Hello, MCP!"
+            response = await session.call_tool(
+                name="string_length",
+                arguments={"args": {"text": test_string}},
+            )
+            result = response.content[0].text
+            print(f"\n📏 String length of '{test_string}':", result)
+
+            # Test reverse strings tool
+            test_strings = ["apple", "banana", "cherry"]
+            response = await session.call_tool(
+                name="reverse_strings",
+                arguments={"args": {"strings": test_strings}},
+            )
+            result = response.content[0].text
+            print(f"\n🔄 Reversing list {test_strings}:", result, "\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+I won’t go into too much detail into what’s going on here as it isn’t the focus of this particular article, and it is pretty self-explanatory. but if all is set up properly, the client code should start your server and call its tools. It’s important to note that you don’t have to be running the server yourself, the client script will take care of it. Your output should be something like this:
+PS C:\dev_new\agentic-research-mcp> uv run .\test_client.py
+
+📱 Starting MCP client...
+
+🔧 Available tools: hello, string_length, reverse_strings
+
+💬 Server response (hello): Hello, World! This is your basic MCP server.
+
+📏 String length of 'Hello, MCP!': {"text": "Hello, MCP!", "length": 11}
+
+🔄 Reversing list ['apple', 'banana', 'cherry']: {"original": ["apple", "banana", "cherry"], "reversed": ["elppa", "ananab", "yrrehc"]}
+Wonderful! So how do we get this to do some agentic research for us? As Ryan George would say: “Super easy, barely an inconvenience!”
+In comes Atomic Agents
+
+If you are already familiar with Atomic Agents, great! If not, the Atomic Agents framework is designed around the concept of atomicity to be an extremely lightweight and modular framework for building Agentic AI pipelines and applications without sacrificing developer experience and maintainability. The framework provides a set of tools and agents that can be combined to create powerful applications. It is built on top of Instructor and leverages the power of Pydantic for data and schema validation and serialization. All logic and control flows are written in Python, enabling developers to apply familiar best practices and workflows from traditional software development without compromising flexibility or clarity.
+GitHub: https://github.com/BrainBlend-AI/atomic-agents
+The Tools
+First, we will want to figure out what we will use for our actual search. Personally, I really like running a local SearxNG using Docker however as it is probably easier to set up a Tavily API key, let’s go with that route for now since you get 1000 free searches per month anyways. Later, we’ll see how we can easily switch this around, for now make an account and a free API key at https://tavily.com/
+Now, we need to install the Tavily tool into our codebase, we can either do this through the Atomic Assembler CLI tool
+uv run atomic
+After selecting “download tools” you can now select the Tavily tool.
+
+You can also press i to see the tool’s README and setup instructions.
+
+
+After creating and selecting the “tools” folder, where the tools will be installed, we can now continue.
+
+As you will notice, the CLI will tell you that the tool has been copied into your codebase rather than installed as a dependency. The reasoning here is that you should have full ownership over this tool. 99% of the cases, you are eventually going to want to change details and abstractions will only get in your way. Beside, you don’t want to install a bunch of dependencies for hundreds of tools, when you only want a single tool.
+This is very similar and follows the same logic as in for example ShadCN, the UI library: https://ui.shadcn.com/ — the UI library.
+Of course, as you will have noticed, there is also a SearxNG Search Tool available which you could use instead.
+Lastly it is worth mentioning you don’t even need to use the CLI, really, most tools are just a single file and can easily be copy-pasted into your codebase. For more info see https://github.com/BrainBlend-AI/atomic-agents/tree/main/atomic-forge
+Just like Agents, each tool in the Atomic Agents framework has an input schema, an output schema, a configuration, and a mainguard in order to be able to run the tool standalone for debugging & testing purposes.
+That being said, you could navigate to the tool file, and run it, the output should be something like this:
+{
+  "results": [
+    {
+      "title": "Python (programming language) - Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Python_(programming_language)",
+      "content": "Python Python methods have an explicit self parameter to access instance data, in contrast to the implicit self (or 
+this) in some other object-oriented programming languages (e.g., C++, Java, Objective-C, Ruby).[111] Python also provides methods, 
+often called dunder methods (due to their names beginning and ending with double-underscores), to allow user-defined classes to modify 
+how they are handled by native operations including length, comparison, in arithmetic operations and type conversion.[112] ^ \"Python 
+0.9.1 part 01/21\". ^ \"About Python\". ^ \"Python\". ^ \"round\", The Python standard library, release 3.2, §2: Built-in functions, 
+archived from the original on 25 October 2012, retrieved 14 August 2011 ^ \"round\", The Python standard library, release 2.7, §2: 
+Built-in functions, archived from the original on 27 October 2012, retrieved 14 August 2011 Python. Python Python",
+      "score": 0.5954225,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    },
+    {
+      "title": "Learn Python Programming",
+      "url": "https://www.programiz.com/python-programming",
+      "content": "Learn Python Programming Learn to code solving problems and writing code with our hands-on Python course. Learn to 
+code solving problems with our hands-on Python course! Learn to code solving problems and writing code with our hands-on Python course.
+Learn to code solving problems with our hands-on Python course! Learn Python practically Python Lists Dictionaries in Python Start     
+Learning Python Learn Python Python Challenges Learn Python Python Learn Python practically Python Lists Dictionaries in Python Start  
+Learning Python All Python Tutorials Python Learn Python practically All Python Examples Learn Python Programming Is Python for you?   
+Your First Python Program Python List Is Python for you? Python from Learning Perspective Learn Python Python 3 Tutorials Master Python
+Python Compiler Learn Python App",
+      "score": 0.5863576,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    },
+    {
+      "title": "What Is Machine Learning? Definition, Types, and Examples",
+      "url": "https://www.coursera.org/articles/what-is-machine-learning",
+      "content": "Machine learning is a subfield of artificial intelligence that uses algorithms trained on data sets to create models 
+capable of performing tasks that would otherwise only be possible for humans, such as categorizing images, analyzing data, or
+predicting price fluctuations. Machine learning is a subfield of artificial intelligence (AI) that uses algorithms trained on data sets
+to create self-learning models capable of predicting outcomes and classifying information without human intervention. While AI refers  
+to the general attempt to create machines capable of human-like cognitive abilities, machine learning specifically refers to the use of
+machine learning algorithms and data sets to do so. Whether you want to become a machine learning engineer or just want to learn AI to 
+boost your productivity at work, Coursera has a training program for you:",
+      "score": 0.86331123,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    },
+    {
+      "title": "What is machine learning? - IBM",
+      "url": "https://www.ibm.com/think/topics/machine-learning",
+      "content": "Machine learning (ML) is a branch of artificial intelligence (AI) and computer science that focuses on the using data
+and algorithms to enable AI to imitate the way that humans learn, gradually improving its accuracy. Supervised learning, also known as 
+supervised machine learning, is defined by its use of labeled datasets to train algorithms to classify data or predict outcomes        
+accurately. Reinforcement machine learning is a machine learning model that is similar to supervised learning, but the algorithm isn’t 
+trained using sample data. However, implementing machine learning in businesses has also raised a number of ethical concerns about AI  
+technologies. Train, validate, tune and deploy generative AI, foundation models and machine learning capabilities with IBM watsonx.ai, 
+a next-generation enterprise studio for AI builders.",
+      "score": 0.8559598,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    },
+    {
+      "title": "What is Artificial Intelligence? - GeeksforGeeks",
+      "url": "https://www.geeksforgeeks.org/what-is-artificial-intelligence/",
+      "content": "Artificial Intelligence (AI) refers to the development of computer systems of performing tasks that require human    
+intelligence. *Human-like cognitive abilities:* General AI systems can understand, learn, and apply knowledge across various tasks and 
+domains, similar to human intelligence. Artificial Intelligence (AI) uses a wide range of techniques and approaches that enable        
+machines to simulate human-like intelligence and perform tasks that traditionally require human assistance. Overall, AI systems work by
+leveraging data, algorithms, and computational power to learn from experience, make decisions, and perform tasks autonomously. Unlike  
+Robotic Process Automation (RPA), which handles basic, rule-based tasks, AI automation can manage advanced tasks like understanding    
+language, making decisions, and even learning from experi 4 min read",
+      "score": 0.7750779,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    },
+    {
+      "title": "Artificial intelligence - Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+      "content": "The traditional goals of AI research include reasoning, knowledge representation, planning, learning, natural        
+language processing, perception, and support for robotics.[a] General intelligence—the ability to complete any task performed by a     
+human on an at least equal level—is among the field's long-term goals.[4] To reach these goals, AI researchers have adapted and        
+integrated a wide range of techniques, including search and mathematical optimization, formal logic, artificial neural networks, and   
+methods based on statistics, operations research, and economics.[b] AI also draws upon psychology, linguistics, philosophy,
+neuroscience, and other fields.[5]",
+      "score": 0.77405477,
+      "raw_content": null,
+      "query": null,
+      "answer": null
+    }
+  ]
+}
+Of course, we will probably also want to scrape some web pages to get more details, for that we can look at the structure of the Tavily search tool, and build a new tool for scraping using BeautifulSoup, using the same structure.
+import re
+from typing import Optional
+from urllib.parse import urlparse
+
+import requests
+from bs4 import BeautifulSoup
+from markdownify import markdownify
+from pydantic import Field, HttpUrl
+from readability import Document
+
+from atomic_agents.agents.base_agent import BaseIOSchema
+from atomic_agents.lib.base.base_tool import BaseTool, BaseToolConfig
+
+
+class WebpageScraperToolInputSchema(BaseIOSchema):
+    """Schema for webpage scraper input."""
+
+    url: HttpUrl = Field(..., description="URL of the webpage to scrape.")
+
+
+class WebpageMetadata(BaseIOSchema):
+    """Schema for webpage metadata."""
+
+    title: str = Field(..., description="The title of the webpage.")
+    domain: str = Field(..., description="Domain name of the website.")
+    description: Optional[str] = Field(
+        None, description="Meta description of the webpage."
+    )
+
+
+class WebpageScraperToolOutputSchema(BaseIOSchema):
+    """Schema for webpage scraper output."""
+
+    content: str = Field(..., description="The scraped content in markdown format.")
+    metadata: WebpageMetadata = Field(
+        ..., description="Metadata about the scraped webpage."
+    )
+
+
+class WebpageScraperToolConfig(BaseToolConfig):
+    """Configuration for the webpage scraper tool."""
+
+    user_agent: str = Field(
+        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        description="User agent string to use for requests.",
+    )
+    timeout: int = Field(
+        default=30,
+        description="Timeout in seconds for HTTP requests.",
+    )
+
+
+class WebpageScraperTool(BaseTool):
+    """Tool for scraping webpage content."""
+
+    input_schema = WebpageScraperToolInputSchema
+    output_schema = WebpageScraperToolOutputSchema
+
+    def __init__(self, config: WebpageScraperToolConfig = WebpageScraperToolConfig()):
+        super().__init__(config)
+        self.config = config
+
+    def _fetch_webpage(self, url: str) -> str:
+        """Fetches webpage content."""
+        headers = {
+            "User-Agent": self.config.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        response = requests.get(url, headers=headers, timeout=self.config.timeout)
+        return response.text
+
+    def _extract_metadata(
+        self, soup: BeautifulSoup, doc: Document, url: str
+    ) -> WebpageMetadata:
+        """Extracts metadata from the webpage."""
+        domain = urlparse(url).netloc
+        description = None
+
+        description_tag = soup.find("meta", attrs={"name": "description"})
+        if description_tag:
+            description = description_tag.get("content")
+
+        return WebpageMetadata(
+            title=doc.title(),
+            domain=domain,
+            description=description,
+        )
+
+    def _clean_markdown(self, markdown: str) -> str:
+        """Cleans up markdown content."""
+        markdown = re.sub(r"\n\s*\n\s*\n", "\n\n", markdown)
+        markdown = "\n".join(line.rstrip() for line in markdown.splitlines())
+        markdown = markdown.strip() + "\n"
+        return markdown
+
+    def _extract_main_content(self, soup: BeautifulSoup) -> str:
+        """Extracts main content from webpage."""
+        for element in soup.find_all(["script", "style", "nav", "header", "footer"]):
+            element.decompose()
+
+        content_candidates = [
+            soup.find("main"),
+            soup.find(id=re.compile(r"content|main", re.I)),
+            soup.find(class_=re.compile(r"content|main", re.I)),
+            soup.find("article"),
+        ]
+
+        main_content = next((c for c in content_candidates if c), None)
+        if not main_content:
+            main_content = soup.find("body")
+
+        return str(main_content) if main_content else str(soup)
+
+    def run(
+        self, params: WebpageScraperToolInputSchema
+    ) -> WebpageScraperToolOutputSchema:
+        """Runs the webpage scraper tool."""
+        html_content = self._fetch_webpage(str(params.url))
+        soup = BeautifulSoup(html_content, "html.parser")
+        doc = Document(html_content)
+
+        main_content = self._extract_main_content(soup)
+        markdown_content = markdownify(
+            main_content,
+            strip=["script", "style"],
+            heading_style="ATX",
+            bullets="-",
+        )
+        markdown_content = self._clean_markdown(markdown_content)
+        metadata = self._extract_metadata(soup, doc, str(params.url))
+
+        return WebpageScraperToolOutputSchema(
+            content=markdown_content,
+            metadata=metadata,
+        )
+This tool will, given a URL, provide you with a “markdownified” page content that you can feed into the LLM.
+The Intelligence
+Great, now that we have all of the tool stuff out of the way, let’s break down how to put it all together and orchestrate it.
+First of all, let’s talk about which agents we’ll be defining. Since this is a rather simple research pipeline, I like having an agent that is specialized in generating the perfect search queries, and another agent that is specialized in answering questions based on context. Anything else that happens, such as how the scraping happens, how many pages we scrape, etc… is all up to us as developers to decide!
+In order to make sure they both use the same configuration we’ll also throw in a config class (though this is certainly not a hard requirement).
+"""Configuration settings for the MCP server."""
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class ChatConfig:
+    """Configuration settings for chat models."""
+
+    # OpenAI API key from environment variable
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    # Default model to use
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    @classmethod
+    def validate(cls):
+        """Validate that required configuration is present."""
+        if not cls.api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+Now, let’s define both of these in a new agents directory, starting with the Query Generation Agent.
+NOTE: I am using OpenAI with GPT-4o-mini, but you can use any LLM from any provider, even locally using something like ollama or lmstudio — simply change the base URL. For more info see this example and these docs.
+"""Query generation agent for the Deep Research MCP server."""
+
+import instructor
+import openai
+from pydantic import Field
+from atomic_agents.agents.base_agent import BaseIOSchema, BaseAgent, BaseAgentConfig
+from atomic_agents.lib.components.system_prompt_generator import SystemPromptGenerator
+
+from ..tools.tavily_search import TavilySearchToolInputSchema
+from ..config import ChatConfig
+
+
+class QueryAgentInputSchema(BaseIOSchema):
+    """Input schema for the QueryAgent."""
+
+    instruction: str = Field(
+        ...,
+        description="A detailed instruction or request to generate search engine queries for.",
+    )
+    num_queries: int = Field(
+        ..., description="The number of search queries to generate."
+    )
+
+
+def create_query_agent() -> BaseAgent:
+    """Creates and configures a new query generation agent."""
+    return BaseAgent(
+        BaseAgentConfig(
+            client=instructor.from_openai(openai.OpenAI(api_key=ChatConfig.api_key)),
+            model=ChatConfig.model,
+            system_prompt_generator=SystemPromptGenerator(
+                background=[
+                    "You are an expert search engine query generator with a deep understanding of which queries will maximize relevant results."
+                ],
+                steps=[
+                    "Analyze the given instruction to identify key concepts",
+                    "For each aspect, craft a search query using appropriate operators",
+                    "Ensure queries cover different angles (technical, practical, etc.)",
+                ],
+                output_instructions=[
+                    "Return exactly the requested number of queries",
+                    "Format each query like a search engine query, not a question",
+                    "Each query should be concise and use relevant keywords",
+                ],
+            ),
+            input_schema=QueryAgentInputSchema,
+            output_schema=TavilySearchToolInputSchema,
+        )
+    )
+As you can see, this agent’s output schema is actually the input schema to the search tool! This also means that if we want to change the search tool to, let’s say SearxNG, all we have to do is change this schema and we are good to go!
+Now let’s define the Question-Answering agent
+"""Question answering agent for the Deep Research MCP server."""
+
+import instructor
+import openai
+from pydantic import Field
+from atomic_agents.agents.base_agent import BaseIOSchema, BaseAgent, BaseAgentConfig
+from atomic_agents.lib.components.system_prompt_generator import SystemPromptGenerator
+
+from agentic_research_mcp.tools.webpage_scraper import WebpageScraperToolOutputSchema
+
+from ..config import ChatConfig
+
+
+
+class QuestionAnsweringAgentInputSchema(BaseIOSchema):
+    """Input schema for the QuestionAnsweringAgent."""
+
+    question: str = Field(..., description="The question to answer.")
+    context: list[WebpageScraperToolOutputSchema] = Field(
+        ...,
+        description="List of scraped webpages used to generate the answer.",
+    )
+
+
+class QuestionAnsweringAgentOutputSchema(BaseIOSchema):
+    """Output schema for the QuestionAnsweringAgent."""
+
+    answer: str = Field(..., description="The answer to the question.")
+
+
+def create_qa_agent() -> BaseAgent:
+    """Creates and configures a new question answering agent."""
+    return BaseAgent(
+        BaseAgentConfig(
+            client=instructor.from_openai(openai.OpenAI(api_key=ChatConfig.api_key)),
+            model=ChatConfig.model,
+            system_prompt_generator=SystemPromptGenerator(
+                background=[
+                    "You are an expert research assistant focused on providing accurate, well-sourced information.",
+                    "Your answers should be based on the provided web content and include relevant source citations.",
+                ],
+                steps=[
+                    "Analyze the question and identify key information needs",
+                    "Review all provided web content thoroughly",
+                    "Synthesize information from multiple sources",
+                    "Formulate a clear, comprehensive answer",
+                ],
+                output_instructions=[
+                    "Answer should be detailed but concise",
+                    "Include specific facts and data from sources",
+                    "If sources conflict, acknowledge the discrepancy",
+                    "If information is insufficient, acknowledge limitations",
+                ],
+            ),
+            input_schema=QuestionAnsweringAgentInputSchema,
+            output_schema=QuestionAnsweringAgentOutputSchema,
+        )
+    )
+Again this is pretty straightforward, but interesting to note here is how the input schema uses a list[WebpageScraperToolOutputSchema] field which makes the scraped output directly pluggable into the agent.
+Now all that’s left to do is update the server and the testfile to run us through the pipeline (I included comments denoting each step in the code)
+# agentic_research_mcp\server.py
+
+import logging
+import os
+import json
+import traceback
+from mcp.server.fastmcp import FastMCP
+
+# Import required components for the web search pipeline
+from agentic_research_mcp.agents.query_agent import create_query_agent, QueryAgentInputSchema
+from agentic_research_mcp.agents.qa_agent import create_qa_agent, QuestionAnsweringAgentInputSchema
+from agentic_research_mcp.tools.tavily_search import (
+    TavilySearchTool,
+    TavilySearchToolConfig,
+    TavilySearchToolInputSchema
+)
+from agentic_research_mcp.tools.webpage_scraper import (
+    WebpageScraperTool,
+    WebpageScraperToolInputSchema
+)
+
+# Set up logging to show INFO level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def main():
+    # Create a new MCP server with the identifier "tutorial"
+    mcp = FastMCP("research_pipeline")
+    logger.info("Starting research pipeline server...")
+
+    try:
+        # Initialize the components
+        logger.info("Initializing query agent...")
+        query_agent = create_query_agent()
+
+        logger.info("Initializing QA agent...")
+        qa_agent = create_qa_agent()
+
+        # Initialize Tavily search tool with API key from environment
+        tavily_api_key = os.getenv("TAVILY_API_KEY", "")
+        if not tavily_api_key:
+            logger.error("TAVILY_API_KEY environment variable is not set. Web search will not work properly.")
+            raise ValueError("TAVILY_API_KEY environment variable must be set")
+
+        logger.info("Initializing Tavily search tool...")
+        tavily_tool = TavilySearchTool(
+            config=TavilySearchToolConfig(
+                api_key=tavily_api_key,
+                max_results=5,  # Limiting to top 5 results per query
+                include_answer=True
+            )
+        )
+
+        logger.info("Initializing web scraper tool...")
+        scraper_tool = WebpageScraperTool()
+
+        @mcp.tool(
+            name="web_search_pipeline",
+            description="Performs a web search pipeline: generates queries, searches web, sorts results, scrapes pages, and answers questions."
+        )
+        async def web_search_pipeline(args: dict) -> str:
+            # Extract the instruction and question
+            instruction = args.get("instruction", "")
+            question = args.get("question", instruction)  # Use instruction as question if not provided
+            num_queries = args.get("num_queries", 3)
+
+            logger.info(f"Starting web search pipeline for question: {question}")
+
+            try:
+                # Step 1: Generate search queries using query agent
+                logger.info(f"Step 1: Generating {num_queries} search queries...")
+                query_input = QueryAgentInputSchema(instruction=instruction, num_queries=num_queries)
+                query_result = query_agent.run(query_input)
+                queries = query_result.queries
+                logger.info(f"Generated queries: {queries}")
+
+                # Step 2: Perform web search using Tavily
+                logger.info(f"Step 2: Performing web search with {len(queries)} queries...")
+                search_input = TavilySearchToolInputSchema(queries=queries)
+                search_results = tavily_tool.run(search_input)
+                logger.info(f"Received {len(search_results.results)} search results")
+
+                # Step 3: Sort results by score in descending order
+                logger.info("Step 3: Sorting results by score...")
+                sorted_results = sorted(search_results.results, key=lambda x: x.score, reverse=True)
+                logger.info(f"Top result score: {sorted_results[0].score if sorted_results else 'No results'}")
+
+                # Step 4: Take top results and scrape their content
+                top_results = sorted_results[:5]  # Limit to top 5 results
+                scraped_pages = []
+                logger.info(f"Step 4: Scraping content from top {len(top_results)} results...")
+
+                for i, result in enumerate(top_results):
+                    try:
+                        logger.info(f"Scraping {i+1}/{len(top_results)}: {result.url}")
+                        scrape_input = WebpageScraperToolInputSchema(url=result.url)
+                        scrape_result = scraper_tool.run(scrape_input)
+                        scraped_pages.append(scrape_result)
+                        logger.info(f"Successfully scraped {result.url}")
+                    except Exception as e:
+                        logger.error(f"Error scraping {result.url}: {str(e)}")
+                        logger.error(traceback.format_exc())
+
+                # Step 5: Generate answer using QA agent
+                logger.info("Step 5: Generating answer using QA agent...")
+                qa_input = QuestionAnsweringAgentInputSchema(question=question, context=scraped_pages)
+                qa_result = qa_agent.run(qa_input)
+                logger.info("Answer generated successfully")
+
+                # Return comprehensive result as JSON string
+                result = {
+                    "question": question,
+                    "queries_generated": queries,
+                    "search_results": [
+                        {
+                            "title": result.title,
+                            "url": result.url,
+                            "score": float(result.score)  # Ensure score is serializable
+                        } for result in sorted_results[:10]  # Include top 10 search results in response
+                    ],
+                    "answer": qa_result.markdown_output if hasattr(qa_result, 'markdown_output') else qa_result.answer,
+                    "references": qa_result.references if hasattr(qa_result, 'references') else [],
+                    "followup_questions": qa_result.followup_questions if hasattr(qa_result, 'followup_questions') else []
+                }
+                logger.info("Pipeline completed successfully")
+                return json.dumps(result)  # Return JSON string
+
+            except Exception as e:
+                logger.error(f"Error in pipeline execution: {str(e)}")
+                logger.error(traceback.format_exc())
+                error_response = {
+                    "error": str(e),
+                    "question": question,
+                    "stage": "pipeline execution",
+                    "traceback": traceback.format_exc()
+                }
+                return json.dumps(error_response)  # Return error as JSON string
+
+        logger.info("All components initialized successfully. Starting server...")
+        # Start the server
+        mcp.run()
+
+    except Exception as e:
+        logger.error(f"Error during server initialization: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+if __name__ == "__main__":
+    main()
+# test_client.py
+
+import asyncio
+import sys
+import json
+import logging
+from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+async def main():
+    # Connect to the server using the current Python interpreter
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "agentic_research_mcp.server"],
+    )
+
+    logger.info("\n📱 Starting MCP client...\n")
+
+    try:
+        # Connect to the server and create a session
+        async with stdio_client(server_params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                # Initialize the session and get available tools
+                await session.initialize()
+                tools = await session.list_tools()
+                logger.info("🔧 Available tools: %s", ", ".join(tool.name for tool in tools.tools))
+
+                # Call the hello tool
+                logger.info("Testing hello tool...")
+                response = await session.call_tool(
+                    name="hello",
+                    arguments={"args": {}},
+                )
+                logger.info("\n💬 Server response (hello): %s", response.content[0].text)
+
+                # Test the web search pipeline
+                logger.info("\n🔍 Testing web search pipeline...")
+                search_question = "What are the latest advancements in quantum computing?"
+
+                try:
+                    logger.info("\n❓ Question: %s", search_question)
+                    logger.info("Calling web_search_pipeline tool...")
+
+                    response = await session.call_tool(
+                        name="web_search_pipeline",
+                        arguments={
+                            "args": {
+                                "instruction": search_question,
+                                "num_queries": 3
+                            }
+                        },
+                    )
+
+                    logger.info("Received response from web_search_pipeline")
+                    response_text = response.content[0].text
+                    logger.info("Raw response: %s", response_text)
+
+                    # Parse and display the JSON response
+                    result = json.loads(response_text)
+
+                    if "error" in result:
+                        logger.error("Pipeline error: %s", result["error"])
+                        if "traceback" in result:
+                            logger.error("Traceback: %s", result["traceback"])
+                        return
+
+                    # Print generated queries
+                    print("\n🔎 Generated Search Queries:")
+                    for i, query in enumerate(result.get("queries_generated", [])):
+                        print(f"  {i+1}. {query}")
+
+                    # Print top search results
+                    print("\n📊 Top Search Results:")
+                    for i, result_item in enumerate(result.get("search_results", [])[:5]):  # Show top 5
+                        print(f"  {i+1}. {result_item['title']} ({result_item['score']:.4f})")
+                        print(f"     URL: {result_item['url']}")
+
+                    # Print the generated answer
+                    print("\n📝 Generated Answer:")
+                    print(result.get("answer", "No answer generated"))
+
+                    # Print references if available
+                    if result.get("references"):
+                        print("\n📚 References:")
+                        for i, ref in enumerate(result["references"]):
+                            print(f"  {i+1}. {ref}")
+
+                    # Print follow-up questions if available
+                    if result.get("followup_questions"):
+                        print("\n❓ Suggested Follow-up Questions:")
+                        for i, question in enumerate(result["followup_questions"]):
+                            print(f"  {i+1}. {question}")
+
+                except json.JSONDecodeError as e:
+                    logger.error("Failed to parse JSON response: %s", str(e))
+                    logger.error("Raw response content: %s", response.content[0].text if response and response.content else "No content")
+                except Exception as e:
+                    logger.error("Error in web search pipeline: %s", str(e))
+                    import traceback
+                    logger.error("Traceback: %s", traceback.format_exc())
+
+    except Exception as e:
+        logger.error("Error connecting to server: %s", str(e))
+        import traceback
+        logger.error("Traceback: %s", traceback.format_exc())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+Finally, let’s update our pyproject.toml file in order to include a script that we can easily call the research agent MCP with. After this make sure to run uv pip install -e .
+[project]
+name = "agentic-research-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.11.12",
+    "atomic-agents>=1.0.21",
+    "beautifulsoup4>=4.13.3",
+    "instructor>=1.7.2",
+    "lxml[html-clean]>=5.3.1",
+    "markdownify>=0.14.1",
+    "mcp[cli]>=1.3.0",
+    "openai>=1.63.2",
+    "pydantic>=2.10.6",
+    "python-dotenv>=1.0.1",
+    "readability-lxml>=0.8.1",
+    "requests>=2.32.3",
+]
+
+[project.scripts]
+agentic-research = "agentic_research_mcp.server:main"
+uv pip install -e .
+After that, an executable should end up in your .venv folder, which we can now call from any application that supports MCP!
+Now all that’s left is to make our IDE (in my case Cursor) able to call our MCP server and give it a spin! In my case, I let it research some info on Atomic Agents and MCP, and then complete the README.md
+Here is what this setup might look like in Cursor:
+
+
+and here it is churning out the perfect start to our README.md to this project. Certainly a big improvement over the stock web search that is used in Cursor.
+
+
+Conclusion
+So, that’s the basic setup. Of course it’s easy to imagine how you can modify this to do deeper research, use internal documentation instead of web search, heck you can have an entire pipeline that generates and executes code in some kind of “sub-routine” if you wanted to. Your imagination is the limit.
+So, remember, if you’re tired of code you can’t fully control — or if you simply want to accelerate your AI development with a truly developer-friendly approach — give Atomic Agents a try. We’d love to hear your feedback, see your projects, and help you tackle your next big AI idea.
+GitHub Repo: BrainBlend-AI/atomic-agents
+API Docs: https://brainblend-ai.github.io/atomic-agents/
+Examples: Atomic Examples
+Subreddit: reddit.com/r/AtomicAgents
+And if you’d like to support further development — or just say thanks for making your dev life easier — I’d be honored if you’d consider a donation via PayPal or a sponsorship on GitHub Sponsors. Your contributions help keep this project growing, documented, and improved for everyone.
+Happy coding — and welcome to a more streamlined way to build AI!
+Update: The latest version of Cursor kind-of fixes the problem by allowing the agent to do continuous web search — it is still not a separate agent summarizing the information, but it’s nice. Nevertheless this article and repository should serve as a wonderful base for you to build your own agentic MCP “tools”
+Support the Author
+If you found this article useful, please consider donating any appropriate amount to my PayPal.me tip jar!
+Pay Kenny Vaneetvelde using PayPal.Me
+Go to paypal.me/KennyVaneetvelde and type in the amount. Since it’s PayPal, it’s easy and secure. Don’t have a PayPal…
+www.paypal.com
+Your support means the world and allows me to continue to spend time writing articles, making tutorials, …
+Thank you!
+If you loved my content and want to get in touch, you can do so through LinkedIn or even feel free to reach out to me by email at kenny@brainblendai.com.
+Similarly, if you need an AI-driven project or prototype developed, please feel free to schedule an appointment with BrainBlend AI and we will make sure your project gets the quality treatment it deserves in a way that is maintainable and ready for production!
+You can also find me on X/Twitter or you can give me a follow on GitHub and check out and star any of my projects on there, such as Atomic Agents!
+
+Artificial Intelligence
+Coding
+Python
+Agentic Ai
+AI
+344
+
+3
+
+
+
+AI Advances
+Published in AI Advances
+29K Followers
+·
+Last published 8 hours ago
+Democratizing access to artificial intelligence
+Follow
+Kenny Vaneetvelde
+Written by Kenny Vaneetvelde
+1.98K Followers
+·
+82 Following
+Freelance Developer // AI & Large Language Models // Python // Coaching // FrontEnd // Author with Packt Publishing - TheDeadlyPretzel on Reddit
+Follow
+
+
+Responses (3)
+Ypkqkvfhw
+Ypkqkvfhw
+What are your thoughts?﻿
+Cancel
+Respond
+Yakov Keselman
+Yakov Keselman
+Mar 2
+
+It would be really cool if an agent were able to read this page and follow the instructions. It still takes a human to do the dirty work :)
+1
+Reply
+Meir Michanie
+Meir Michanie
+Mar 24
+
+Great tool, I've been following your development for a while.
+What's the actual command you added to Cursor to run the mcp client?
+Reply
+Nabih Nagib
+Nabih Nagib
+Mar 3
+
+Atomic Agents "LEGO" modularity and its tools are really powerfull. trying to use the concept in every build
+Reply
+More from Kenny Vaneetvelde and AI Advances
+Want to Build AI Agents? Tired of LangChain, CrewAI, AutoGen & Other AI Frameworks? Read this!
+AI Advances
+In
+AI Advances
+by
+Kenny Vaneetvelde
+Want to Build AI Agents? Tired of LangChain, CrewAI, AutoGen & Other AI Frameworks? Read this!
+Frameworks like LangChain, CrewAI, and AutoGen have gained popularity by promising high-level abstractions for building AI systems. Yet…
+
+Jan 19
+1.6K
+31
+
+
+LLMs Do Not Predict the Next Word
+AI Advances
+In
+AI Advances
+by
+Harys Dalvi
+LLMs Do Not Predict the Next Word
+RLHF forces us to view LLMs as agents in an environment, not just statistical models.
+
+Apr 3
+1.99K
+43
+
+
+Agentic AI for Data Engineering
+AI Advances
+In
+AI Advances
+by
+Debmalya Biswas
+Agentic AI for Data Engineering
+Reimagining Enterprise Data Management leveraging AI Agents
+
+Mar 23
+812
+20
+
+
+Forget LangChain, CrewAI and AutoGen — Try This Framework and Never Look Back
+Generative AI
+In
+Generative AI
+by
+Kenny Vaneetvelde
+Forget LangChain, CrewAI and AutoGen — Try This Framework and Never Look Back
+In the rapidly evolving field of artificial intelligence, developers are inundated with frameworks and tools promising to simplify the…
+
+Oct 21, 2024
+2.3K
+39
+
+
+See all from Kenny Vaneetvelde
+See all from AI Advances
+Recommended from Medium
+5 Open-Source MCP Servers That’ll Make Your AI Agents Unstoppable
+Coding Nexus
+In
+Coding Nexus
+by
+Code Pulse
+5 Open-Source MCP Servers That’ll Make Your AI Agents Unstoppable
+So, I’ve been messing around with AI lately — Claude, mostly — and I got kinda bored with it just answering questions.
+
+6d ago
+668
+15
+
+
+The Power Duo: How A2A + MCP Let You Build Practical AI Systems Today
+Manoj Desai
+Manoj Desai
+The Power Duo: How A2A + MCP Let You Build Practical AI Systems Today
+A clean integration protocol for AI agents. Combines A2A (Agent-to-Agent) communication with MCP (Model Context Protocol) to build modular…
+5d ago
+325
+5
+
+
+Google’s SECRET AI Just Killed Cursor! (Firebase Studio is INSANE)
+AI Advances
+In
+AI Advances
+by
+Ashen Thilakarathna
+Google’s SECRET AI Just Killed Cursor! (Firebase Studio is INSANE)
+WARNING: This FREE Google AI Will STEAL Your Coding Job!
+
+Apr 13
+1.1K
+26
+
+
+The end of Docker? The Reasons Behind Developers Changing Their Runtimes
+Devlink Tips
+Devlink Tips
+The end of Docker? The Reasons Behind Developers Changing Their Runtimes
+Docker once led the container revolution—but times have changed. Developers are embracing faster, leaner, and more secure alternatives in…
+
+Mar 21
+1.3K
+39
+
+
+Best MCP Servers You Should Know
+Data Science in Your Pocket
+In
+Data Science in Your Pocket
+by
+Mehul Gupta
+Best MCP Servers You Should Know
+Blender-MCP, GitHub-MCP, File System-MCP, Docker-MCP, WhatsApp-MCP, Puppeteer-MCP, SQL-MCP, Figma-MCP, PowerPoint-MCP, Notion-MCP…
+Mar 31
+1K
+7
+
+
+Chain-of-Draft (CoD) Is The New King Of Prompting Techniques
+Level Up Coding
+In
+Level Up Coding
+by
+Dr. Ashish Bamania
+Chain-of-Draft (CoD) Is The New King Of Prompting Techniques
+A deep dive into the novel Chain-of-Draft (CoD) Prompting that reducing LLM inference cost and latency like never before.
+
+Mar 3
+2.7K
+40
+
+
+See more recommendations
+Help
+Status
+About
+Careers
+Press
+Blog
+Privacy
+Rules
+Terms
+Text to speech

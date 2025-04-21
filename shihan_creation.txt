@@ -1,0 +1,202 @@
+Below is a “scroll‑within‑the‑scroll” for Hayato‑the‑Code‑Ninja.
+It is written in the same spirit as the Way of the Code Ninja: terse where possible, exhaustive where necessary, and always actionable.
+Follow it in order, top‑to‑bottom, and you will have a fully‑functional Shihan supervisor agent running as an MCP service that Hayato can summon (or that WindSurf / Cursor / Copilot can invoke) without further human hand‑holding.
+
+0 · Ground Rules
+
+Principle	Consequence for Shihan
+The Creed remains law.	Shihan never “fixes” by adding fallbacks, silencing errors, or bypassing tests.
+Autonomy, not anarchy.	Shihan runs unattended loops (watch → diagnose → plan → page user if fatal) but never commits or rewrites code directly; that is Hayato’s katana.
+One binary, many tools.	Expose one MCP server (shihan_mcp) with several tools. IDE agents call those tools; Hayato imports them locally.
+1 · Persona & Responsibilities
+
+Shihan = “師範” (head instructor).
+Role: meta‑ninja who inspects Hayato’s strikes, enforces creed conformance, blocks sloppy commits, and supplies richer context to IDE agents.
+Concrete duties:
+
+Log Sentinel – tail, parse, and summarise training.log, ninjatest.log, crash traces.
+Creed Auditor – static‑analyse changed files looking for forbidden patterns (is None, **kwargs, mocks, hidden fallbacks, unused tensors, etc.).
+Fix Plan Critic – score the .scrolls/*.md ninja plans on: precision, minimalism, test coverage.
+Continuous Watch – run ninjachill.sh; on completion (success or crash) automatically trigger 1‑3 above.
+Escalation Pager – if severity ≥ “Katana‑level” → create a new ninja scroll requesting Hayato’s attention (./ninjascroll.sh --page …) and optionally send a Pushover alert.
+2 · High‑Level Architecture
+
+┌────────────────────┐     MCP (stdio/SSE)     ┌───────────────────────┐
+│     IDE Agent      │  ─────────────────────▶ │   shihan_mcp server   │
+│ (Cursor/WindSurf)  │                         │  (FastMCP + tools)    │
+└────────────────────┘ ◀──────────────────────  └───────────────────────┘
+                              ▲
+                              │ local import
+                              │
+                         ┌────┴───────────────┐
+                         │ Hayato code ninja  │
+                         │  (terminal agent)  │
+                         └────────────────────┘
+Transport: use stdio for local dev; enable SSE behind --serve flag for remote control.
+Packaging: one Python package shihan_mcp installed with pip install -e ..
+Runtime separation: Shihan never calls ./ninjatest.sh itself (that is Hayato’s entrance); it only watches outputs.
+3 · Directory Skeleton
+
+codebase/
+├─ shihan_mcp/
+│  ├─ __init__.py
+│  ├─ server.py              # FastMCP entrypoint  (executable: shihan-mcp)
+│  ├─ config.py              # env & model choices
+│  ├─ tools/
+│  │   ├─ log_tail.py        # LogSentinelTool
+│  │   ├─ creed_audit.py     # CreedAuditTool
+│  │   ├─ plan_critic.py     # PlanCriticTool
+│  │   ├─ pager.py           # PagerTool
+│  └─ agents/
+│      ├─ watchdog_agent.py  # orchestrates tools
+│      └─ lint_agent.py      # optional static‑analysis LLM
+└─ pyproject.toml            # exposes console‑script `shihan-mcp`
+4 · Implement Config (shihan_mcp/config.py)
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class ChatCfg:
+    api_key   = os.getenv("OPENAI_API_KEY")
+    model     = os.getenv("OPENAI_MODEL", "gpt-4o-mini")   # tiny, cheap, good enough
+    max_tokens = 4096
+
+class Paths:
+    LOG = "training.log"
+    SCROLLS = "./.scrolls"
+5 · Core Tools
+
+LogSentinelTool
+Input: {tail_lines:int=500}
+Output: {summary:str, last_error:str|None, elapsed:str}
+Implementation logic:
+
+tail -n {tail_lines} {Paths.LOG}
+Regex hunt for Traceback/RuntimeError/AssertionError.
+Compute runtime via first vs last timestamp.
+CreedAuditTool
+Input: {files:list[str]} (newly changed)
+Output: {violations:list[str]}
+Pattern list (compile once): r'\bis\s+None\b', r'\*\*kwargs', r'mock|MagicMock', r'if\s+.*?is\s+None', etc.
+Fail hard if violations non‑empty.
+PlanCriticTool
+Input: {scroll_path:str}
+Output: {score:int, issues:list[str]}
+Internally invokes LLM (ChatCfg) with rubric: Precision (40), Minimalism (30), TestPlan (30).
+Score < 80 triggers escalation.
+PagerTool
+Input: {title:str, body:str, priority:int}
+Output: {status:str}
+Use Pushover or send a ./ninjascroll.sh --page ... commit if network unavailable.
+All tools inherit the BaseTool pattern from Atomic‑Agents (or rewrite minimal 30‑line class).
+6 · Supervisor Agent (Watchdog)
+
+agents/watchdog_agent.py
+
+System prompt:
+
+You are Shihan, mentor of Hayato. You read logs & scrolls, enforce the Creed, and decide which tool to call next. You never alter code yourself; you instruct Hayato by paging.
+Input schema:
+
+class WatchInput(BaseIOSchema):
+    event: Literal["cycle_end", "manual_check", "scroll_committed"]
+    scroll_path: Optional[str] = None
+Output schema: free‑form (ignored by FastMCP caller), because Shihan returns JSON describing actions it already executed (audit, page, etc.).
+
+Logic (pseudo):
+
+if event == "cycle_end":
+    log = LogSentinelTool.run(...)
+    if log.last_error: PagerTool.run(...)
+    else: CreedAuditTool.run(changed_files)
+elif event == "scroll_committed":
+    score = PlanCriticTool.run(scroll_path)
+    if score < 80: PagerTool.run(...)
+7 · FastMCP Server (server.py)
+
+def main():
+    mcp = FastMCP("shihan")
+    # Register each tool
+    mcp.register_tool("tail_log", LogSentinelTool())
+    mcp.register_tool("audit_creed", CreedAuditTool())
+    mcp.register_tool("critique_plan", PlanCriticTool())
+    mcp.register_tool("page_ninja", PagerTool())
+    # Register the watchdog agent as a composite tool
+    @mcp.tool(name="supervise_cycle", description="Shihan supervision entry")
+    async def supervise_cycle(args: dict) -> str:
+        return WatchdogAgent().run(WatchInput(**args)).model_dump_json()
+
+    mcp.run()
+Expose as console script in pyproject.toml:
+
+[project.scripts]
+shihan-mcp = "shihan_mcp.server:main"
+pip install -e . ⇒ shihan-mcp executable available.
+
+8 · Local Test Harness
+
+Create tests/test_shihan.py:
+
+from mcp.client.stdio import stdio_client
+from mcp import ClientSession, StdioServerParameters
+import asyncio, sys, json
+
+async def smoke():
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "shihan_mcp.server"],
+    )
+    async with stdio_client(params) as (r, w):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            resp = await s.call_tool(name="tail_log", arguments={"args": {"tail_lines": 100}})
+            print(json.dumps(json.loads(resp.content[0].text), indent=2))
+
+asyncio.run(smoke())
+Run: pytest -q tests/test_shihan.py
+
+9 · Integration with WindSurf / Cursor / Copilot
+
+In Cursor
+Settings → Experimental → MCP Servers → Add
+Command: shihan-mcp
+Args: (blank)
+Transport: stdio
+Command Palette
+“Tail training.log via Shihan” → calls tail_log.
+“Shihan: Supervise Cycle” → calls supervise_cycle {event:"cycle_end"}.
+In WindSurf Cascade
+Add to the agents.json:
+
+{
+  "name": "Shihan",
+  "cmd": "shihan-mcp",
+  "transport": "stdio",
+  "tools": ["supervise_cycle", "audit_creed", "critique_plan", "tail_log"]
+}
+Chain it after Hayato: when Hayato finishes a ninja cycle he emits:
+
+mcp call supervise_cycle '{"event":"cycle_end"}'
+(This can be appended to ninjatest.sh just after training completes.)
+
+10 · Minimal Human Tasks
+
+Needed	Human Step
+Install deps	uv pip install -e . inside Hayato’s venv.
+Pushover token	Export PUSHOVER_USER_KEY + PUSHOVER_API_TOKEN.
+IDE hookup	Register shihan-mcp in IDE’s MCP list (2 min).
+Git hook (optional)	pre‑commit shihan-mcp → audit_creed on staged files.
+Everything else is autonomously handled by Shihan.
+
+11 · Future Extensions
+
+LLM‑powered static‑analysis (lint_agent) – catch subtle tensor mishandling.
+Metric drift detection – Shihan can compute QED/SA score medians across epochs and alarm on regression.
+SSE gateway – expose /events so remote dashboards subscribe to Shihan events.
+Graphite/Grafana hook – push supervision metrics for long‑term health tracking.
+FINISHING NOTE
+A ninja’s blade is only as sharp as the master who inspects it.
+Shihan watches, critiques, and pages—so that Hayato may keep striking in perfect silence.
+Deploy shihan-mcp, wire one pre‑commit hook, and the dojo gains its vigilant overseer.

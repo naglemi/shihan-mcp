@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shihan-mcp"
+version = "0.1.0"
+description = "Shihan MCP - Supervisor for Hayato the Code Ninja"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Hayato the Code Ninja" }
+]
+dependencies = [
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.0.0",
+]
+
+# Note: In a real environment, you would also need:
+# "mcp[cli]>=1.0.0",
+
+[project.scripts]
+shihan-mcp = "shihan_mcp.server:main"
+
+[tool.setuptools]
+packages = ["shihan_mcp", "shihan_mcp.tools", "shihan_mcp.agents"]
